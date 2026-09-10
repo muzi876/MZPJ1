@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>酒店管理制度文件分析系统</title>
+  <link rel="stylesheet" href="/static/style.css?v=12" />
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>酒店管理制度 / 工作程序分析系统</h1>
+    <nav>
+      <button class="tab active" data-tab="settings">系统设置</button>
+      <button class="tab" data-tab="editor">新建 / 编辑文件</button>
+      <button class="tab" data-tab="list">文件列表</button>
+      <button class="tab" data-tab="items">条目查询</button>
+      <button class="tab" data-tab="employee">员工全景</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- 系统设置 -->
+    <section id="tab-settings" class="panel active">
+      <h2>系统设置（LLM 接口）</h2>
+      <div class="card">
+        <div class="field">
+          <label>API Key</label>
+          <input type="password" id="cfg-apikey" placeholder="sk-..." />
+        </div>
+        <div class="field">
+          <label>接口地址 Base URL</label>
+          <input type="text" id="cfg-baseurl" placeholder="https://api.deepseek.com" />
+        </div>
+        <div class="field">
+          <label>模型名称</label>
+          <input type="text" id="cfg-model" placeholder="deepseek-chat" />
+        </div>
+        <div class="field">
+          <label>三份清单</label>
+          <span class="hint" id="meta-hint">加载中…</span>
+        </div>
+        <div class="actions">
+          <button class="btn primary" id="btn-save-settings">保存配置</button>
+          <button class="btn" id="btn-reimport">重新导入三份清单</button>
+        </div>
+        <div id="settings-msg" class="msg"></div>
+      </div>
+    </section>
+
+    <!-- 新建 / 编辑 -->
+    <section id="tab-editor" class="panel">
+      <h2>文件信息录入</h2>
+      <div class="card">
+        <input type="hidden" id="doc-id" />
+        <div class="field-grid">
+          <div class="field">
+            <label>文件类型 *</label>
+            <select id="doc-type">
+                <option value="管理制度">管理制度</option>
+                <option value="店级管理制度">店级管理制度</option>
+                <option value="工作程序">工作程序</option>
+                <option value="工作说明书">工作说明书</option>
+              </select>
+          </div>
+          <div class="field">
+            <label>上传 Word 自动解析</label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input type="file" id="word-file" accept=".docx,.doc" style="flex:1;font-size:12px" />
+              <button class="btn" id="btn-parse-word" type="button">解析并填表</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>文件编号</label>
+            <input type="text" id="doc-no" placeholder="例：MTFD-CG-B-001" />
+          </div>
+          <div class="field full" id="wrap-title">
+            <label>标题 *</label>
+            <input type="text" id="doc-title" placeholder="文件标题" />
+          </div>
+          <div class="field" id="wrap-dept" style="display:none">
+            <label>所属部门 *</label>
+            <select id="doc-department"><option value="">请选择</option></select>
+          </div>
+          <div class="field full" id="wrap-purpose">
+            <label>目的</label>
+            <textarea id="doc-purpose" rows="2"></textarea>
+          </div>
+          <div class="field full" id="wrap-scope">
+            <label>范围</label>
+            <textarea id="doc-scope" rows="2"></textarea>
+          </div>
+          <div class="field full" id="wrap-regulation">
+            <label>管理规定</label>
+            <textarea id="doc-regulation" rows="8" placeholder="逐条填写管理规定内容…"></textarea>
+          </div>
+          <div class="field full" id="wrap-duty" style="display:none">
+            <label>职责</label>
+            <textarea id="doc-duty" rows="5"></textarea>
+          </div>
+          <div class="field full" id="wrap-work" style="display:none">
+            <label>工作要求</label>
+            <textarea id="doc-work" rows="8"></textarea>
+          </div>
+          <div class="field full" id="wrap-records">
+            <label>相关记录</label>
+            <textarea id="doc-records" rows="2"></textarea>
+          </div>
+          <div class="field full" id="wrap-files">
+            <label>相关文件</label>
+            <textarea id="doc-files" rows="2"></textarea>
+          </div>
+          <!-- 工作说明书 专属字段 -->
+          <div class="field full" id="wrap-jd" style="display:none">
+            <div class="jd-grid">
+              <div class="field">
+                <label>岗位名称 *</label>
+                <select id="doc-position"><option value="">请选择</option></select>
+              </div>
+              <div class="field">
+                <label>直接上级</label>
+                <select id="doc-supervisor"><option value="">请选择</option></select>
+              </div>
+              <div class="field">
+                <label>直接下级</label>
+                <select id="doc-direct-sub"><option value="">请选择</option></select>
+              </div>
+              <div class="field">
+                <label>岗位定员</label>
+                <input type="text" id="doc-headcount" placeholder="例：2 人" />
+              </div>
+            </div>
+          </div>
+          <div class="field full" id="wrap-qualifications" style="display:none">
+            <label>基本任职资格</label>
+            <div class="qual-grid">
+              <div class="field"><label>文化程度</label><input type="text" id="qual-edu" placeholder="例：大专及以上" /></div>
+              <div class="field"><label>工作经验</label><input type="text" id="qual-exp" placeholder="例：3 年以上同岗位经验" /></div>
+              <div class="field"><label>外语水平</label><input type="text" id="qual-lang" placeholder="例：英语口语流利" /></div>
+              <div class="field"><label>基本素质</label><input type="text" id="qual-quality" placeholder="例：责任心强，沟通能力好" /></div>
+            </div>
+          </div>
+          <div class="field full" id="wrap-responsibilities" style="display:none">
+            <label>岗位职责</label>
+            <textarea id="doc-responsibilities" rows="5" placeholder="逐条填写岗位职责…"></textarea>
+          </div>
+          <div class="field full" id="wrap-work-tasks" style="display:none">
+            <label>工作任务</label>
+            <textarea id="doc-work-tasks" rows="5" placeholder="逐条填写工作任务…"></textarea>
+          </div>
+          <div class="field full" id="wrap-relationships" style="display:none">
+            <label>与其它部门或部位的关系</label>
+            <textarea id="doc-relationships" rows="3" placeholder="逐条填写协作关系…"></textarea>
+          </div>
+          <div class="field full" id="wrap-innovation" style="display:none">
+            <label>创新空间</label>
+            <textarea id="doc-innovation" rows="3" placeholder="逐条填写可创新的内容…"></textarea>
+          </div>
+          <div class="field full" id="wrap-assessment" style="display:none">
+            <label>考核标准</label>
+            <textarea id="doc-assessment" rows="4" placeholder="逐条填写考核标准…"></textarea>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn primary" id="btn-save">保存文件</button>
+          <button class="btn" id="btn-reset">清空</button>
+        </div>
+        <div id="editor-msg" class="msg"></div>
+      </div>
+    </section>
+
+    <!-- 文件列表 -->
+    <section id="tab-list" class="panel">
+      <h2>文件列表</h2>
+      <div class="card">
+        <div class="filter-bar">
+          <input type="text" id="f-list-q" placeholder="搜索编号/标题/部门/岗位/负责人…" />
+          <select id="f-list-type"><option value="">全部类型</option>
+            <option>管理制度</option><option>店级管理制度</option><option>工作程序</option><option>工作说明书</option>
+          </select>
+          <select id="f-list-dept"><option value="">全部部门</option></select>
+          <select id="f-list-guest"><option value="">宾客旅程不限</option><option value="是">涉及</option><option value="否">不涉及</option></select>
+          <select id="f-list-compliance"><option value="">合规底线不限</option><option value="是">涉及</option><option value="否">不涉及</option></select>
+          <button class="btn primary" id="btn-list-search">查询</button>
+          <button class="btn" id="btn-list-reset">重置</button>
+        </div>
+        <div class="hint" style="margin-top:8px">提示：点击列标题可排序（升/降序切换）；拖动列标题右边框可调整列宽。</div>
+        <div class="table-wrap" style="overflow-x:auto;margin-top:8px">
+          <table class="table" id="doc-list-table">
+            <colgroup>
+              <col style="width:50px">
+              <col style="width:100px">
+              <col style="width:130px">
+              <col style="width:200px">
+              <col style="width:100px">
+              <col style="width:110px">
+              <col style="width:100px">
+              <col style="width:80px">
+              <col style="width:80px">
+              <col style="width:140px">
+              <col style="width:140px">
+            </colgroup>
+            <thead>
+              <tr>
+                <th data-sort="id">ID<span class="col-resizer"></span></th>
+                <th data-sort="doc_type">文件类型<span class="col-resizer"></span></th>
+                <th data-sort="doc_no">文件编号<span class="col-resizer"></span></th>
+                <th data-sort="title">标题<span class="col-resizer"></span></th>
+                <th data-sort="cur_dept">所属部门<span class="col-resizer"></span></th>
+                <th data-sort="main_position">主责岗位<span class="col-resizer"></span></th>
+                <th data-sort="person_in_charge">负责人<span class="col-resizer"></span></th>
+                <th data-sort="guest_trip">客旅相关<span class="col-resizer"></span></th>
+                <th data-sort="compliance">合规相关<span class="col-resizer"></span></th>
+                <th data-sort="created_at">创建时间<span class="col-resizer"></span></th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="doc-table"></tbody>
+          </table>
+        </div>
+        <div id="doc-pagination" class="pagination-bar"></div>
+      </div>
+    </section>
+
+    <!-- 条目查询 -->
+    <section id="tab-items" class="panel">
+      <h2>条目查询 / 分析</h2>
+      <div class="card">
+        <div class="filter-bar">
+          <select id="f-doc"><option value="">全部文件</option></select>
+          <input type="text" id="f-docno" placeholder="文件编号（精确）" />
+          <input type="text" id="q" placeholder="关键词搜索条目原文…" />
+          <select id="f-dept"><option value="">全部部门</option></select>
+          <select id="f-type">
+            <option value="">全部条款类型</option>
+            <option>工作步骤</option><option>职责</option><option>审批/权限</option>
+            <option>注意事项</option><option>时限要求</option>
+            <option>表单/记录</option><option>其他/规定</option>
+          </select>
+          <input type="text" id="f-pos" placeholder="主责岗位（精确匹配）" />
+          <button class="btn primary" id="btn-search">查询</button>
+          <button class="btn danger" id="btn-delete-items">删除选中</button>
+          <button class="btn" id="btn-export">导出 CSV</button>
+        </div>
+        <div class="hint" style="margin-top:8px">提示：「类型、部门、主责岗位、时限/关键词」可点击编辑（受清单约束）；其余字段为源文档抓取内容，不可在此修改；拖动列标题右边框可调整列宽。</div>
+        <div id="items-stats" class="stats"></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div id="items-total" class="hint" style="margin-bottom:8px"></div>
+        <div class="matrix-wrap">
+          <table class="table editable-table" id="items-tbl">
+            <colgroup>
+              <col style="width:42px"><col style="width:140px"><col style="width:180px">
+              <col style="width:80px"><col style="width:60px"><col style="width:90px">
+              <col style="width:360px"><col style="width:110px"><col style="width:140px">
+              <col style="width:100px"><col style="width:180px">
+            </colgroup>
+            <thead>
+              <tr>
+                <th><input type="checkbox" id="items-checkall" title="全选" /></th>
+                <th data-col="doc_no">文件编号</th><th data-col="title">文件</th>
+                <th data-col="section">章节</th><th data-col="seq">序号</th>
+                <th data-col="item_type">类型</th>
+                <th data-col="content">条目原文</th>
+                <th data-col="department">部门</th>
+                <th data-col="main_position">主责岗位</th>
+                <th data-col="person_in_charge">负责人</th>
+                <th data-col="freq_kw">时限/关键词</th>
+              </tr>
+            </thead>
+            <tbody id="items-table"></tbody>
+          </table>
+        </div>
+        <div id="items-pagination" class="pagination-bar"></div>
+      </div>
+    </section>
+
+    <!-- 员工工作全景 -->
+    <section id="tab-employee" class="panel">
+      <h2>员工工作全景</h2>
+      <div class="card">
+        <div class="field" style="max-width:480px">
+          <label>选择员工（下拉或输入搜索）</label>
+          <input type="text" id="emp-search" list="emp-list" placeholder="输入姓名搜索或点击下拉选择…" autocomplete="off" />
+          <datalist id="emp-list"></datalist>
+        </div>
+        <div class="actions">
+          <button class="btn primary" id="btn-emp-load">加载全景</button>
+        </div>
+        <div id="emp-msg" class="msg"></div>
+      </div>
+
+      <div id="emp-result" style="display:none;margin-top:16px">
+        <div class="card">
+          <div class="sub-tabs" id="emp-view-tabs">
+            <button class="sub-tab active" data-view="guest_trip">宾客旅程视角</button>
+            <button class="sub-tab" data-view="compliance">合规项视角</button>
+            <button class="sub-tab" data-view="internal">内部管理</button>
+            <button class="sub-tab" data-view="collab">协作关系</button>
+          </div>
+          <div id="emp-view-content" style="margin-top:16px">
+            <div class="actions" style="margin-bottom:12px">
+              <button class="btn primary" id="btn-emp-generate">生成 / 刷新该视角全景</button>
+              <span class="hint" id="emp-updated" style="margin-left:12px"></span>
+            </div>
+            <div id="emp-narrative" class="narrative-box" style="display:none"></div>
+            <div id="emp-cards" class="card-grid" style="margin-top:16px"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 结果详情 -->
+    <section id="tab-detail" class="panel">
+      <div class="detail-head">
+        <h2 id="detail-title">分析结果</h2>
+        <div class="actions">
+          <button class="btn" id="btn-back">返回列表</button>
+          <button class="btn primary" id="btn-generate">生成分析（RASIC / 接口卡 / 流程图）</button>
+        </div>
+      </div>
+      <div id="detail-msg" class="msg"></div>
+      <div class="doc-preview card" id="doc-preview"></div>
+      <div id="result-area" style="display:none"></div>
+    </section>
+  </main>
+
+  <script src="/static/app.js?v=31"></script>
+</body>
+</html>

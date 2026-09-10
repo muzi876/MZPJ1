@@ -1,0 +1,42 @@
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 数据库
+*.db
+*.sqlite3
+*.sqlite
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# 调试脚本
+_check.py
+_debug.py
+_test*.py
+
+# 日志
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时文件
+*.tmp
+*.bak
