@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>酒店管理制度文件分析系统</title>
-  <link rel="stylesheet" href="/static/style.css?v=12" />
+  <link rel="stylesheet" href="/static/style.css?v=15" />
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 </head>
@@ -124,7 +124,13 @@
               </div>
               <div class="field">
                 <label>直接下级</label>
-                <select id="doc-direct-sub"><option value="">请选择</option></select>
+                <div class="multiselect" id="sub-ms">
+                  <div class="ms-display" id="sub-ms-display">
+                    <span class="ms-text" id="sub-ms-text">请选择</span>
+                    <span class="ms-arrow">▾</span>
+                  </div>
+                  <div class="ms-dropdown" id="sub-ms-dropdown"></div>
+                </div>
               </div>
               <div class="field">
                 <label>岗位定员</label>
@@ -139,6 +145,8 @@
               <div class="field"><label>工作经验</label><input type="text" id="qual-exp" placeholder="例：3 年以上同岗位经验" /></div>
               <div class="field"><label>外语水平</label><input type="text" id="qual-lang" placeholder="例：英语口语流利" /></div>
               <div class="field"><label>基本素质</label><input type="text" id="qual-quality" placeholder="例：责任心强，沟通能力好" /></div>
+              <div class="field"><label>其他1</label><input type="text" id="qual-other1" placeholder="拓展项" /></div>
+              <div class="field"><label>其他2</label><input type="text" id="qual-other2" placeholder="拓展项" /></div>
             </div>
           </div>
           <div class="field full" id="wrap-responsibilities" style="display:none">
@@ -199,6 +207,7 @@
               <col style="width:80px">
               <col style="width:80px">
               <col style="width:140px">
+              <col style="width:100px">
               <col style="width:140px">
             </colgroup>
             <thead>
@@ -213,6 +222,7 @@
                 <th data-sort="guest_trip">客旅相关<span class="col-resizer"></span></th>
                 <th data-sort="compliance">合规相关<span class="col-resizer"></span></th>
                 <th data-sort="created_at">创建时间<span class="col-resizer"></span></th>
+                <th>原文</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -326,6 +336,19 @@
     </section>
   </main>
 
-  <script src="/static/app.js?v=31"></script>
+  <script src="/static/app.js?v=41"></script>
+
+  <!-- 原文查看弹窗 -->
+  <div id="raw-modal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <div class="modal-head">
+        <span id="raw-modal-title">原始文档</span>
+        <button class="modal-close" onclick="closeRawModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <pre id="raw-modal-content" class="raw-content"></pre>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

@@ -72,9 +72,72 @@ function updatePositionOptionsByDept() {
   const positions = dept ? (positionMap[dept] || []) : [];
   const opts = positions.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
   $("doc-position").innerHTML = '<option value="">请选择</option>' + opts;
-  $("doc-supervisor").innerHTML = '<option value="">请选择</option>' + opts;
-  $("doc-direct-sub").innerHTML = '<option value="">请选择</option>' + opts;
+
+  // 直接上级 = 总办岗位 + 本部门岗位（部门经理上级可能是总经理/副总经理）
+  const zongban = positionMap["总办"] || positionMap["总经理办公室"] || [];
+  const zbOpts = zongban.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
+  const supOpts = (dept === "总办" || dept === "总经理办公室")
+    ? opts
+    : (zbOpts ? `<optgroup label="总办">${zbOpts}</optgroup>` : "")
+      + (opts ? `<optgroup label="本部门">${opts}</optgroup>` : "");
+  $("doc-supervisor").innerHTML = '<option value="">请选择</option>' + supOpts;
+
+  // 直接下级：本部门岗位（多选下拉）
+  renderSubOptions(positions);
 }
+
+// ---------- 直接下级多选下拉组件 ----------
+function renderSubOptions(positions) {
+  const dd = $("sub-ms-dropdown");
+  if (!positions.length) {
+    dd.innerHTML = '<div class="ms-empty">请先选择所属部门</div>';
+  } else {
+    dd.innerHTML = positions.map(p =>
+      `<label class="ms-option"><input type="checkbox" value="${esc(p)}"><span>${esc(p)}</span></label>`
+    ).join("");
+  }
+  // 复选框点击时更新显示文本
+  dd.querySelectorAll("input[type=checkbox]").forEach(cb => {
+    cb.addEventListener("change", updateSubDisplay);
+  });
+  updateSubDisplay();
+}
+
+function getSubSelected() {
+  return Array.from($("sub-ms-dropdown").querySelectorAll("input[type=checkbox]:checked"))
+    .map(cb => cb.value);
+}
+
+function updateSubDisplay() {
+  const selected = getSubSelected();
+  $("sub-ms-text").textContent = selected.length ? selected.join("、") : "请选择";
+  $("sub-ms-text").style.color = selected.length ? "#374151" : "#9ca3af";
+}
+
+function setSubSelected(values) {
+  Array.from($("sub-ms-dropdown").querySelectorAll("input[type=checkbox]")).forEach(cb => {
+    cb.checked = values.includes(cb.value);
+  });
+  updateSubDisplay();
+}
+
+function clearSubSelected() {
+  Array.from($("sub-ms-dropdown").querySelectorAll("input[type=checkbox]")).forEach(cb => {
+    cb.checked = false;
+  });
+  updateSubDisplay();
+}
+
+// 点击显示框展开/收起，点击外部关闭
+document.addEventListener("DOMContentLoaded", () => {
+  $("sub-ms-display").addEventListener("click", (e) => {
+    e.stopPropagation();
+    $("sub-ms").classList.toggle("open");
+  });
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#sub-ms")) $("sub-ms").classList.remove("open");
+});
 
 async function saveSettings() {
   try {
@@ -104,6 +167,8 @@ async function reimport() {
 }
 
 // ---------- 编辑器 ----------
+let _currentRawText = ""; // 保存导入的原始文本，用于对比查看
+let _currentRawFilename = ""; // 保存原始 Word 文件名，用于下载
 function toggleDocType() {
   const t = $("doc-type").value;
   const isReg = t === "管理制度" || t === "店级管理制度";
@@ -138,10 +203,14 @@ function collectDoc() {
     const exp = $("qual-exp").value.trim();
     const lang = $("qual-lang").value.trim();
     const quality = $("qual-quality").value.trim();
+    const other1 = $("qual-other1").value.trim();
+    const other2 = $("qual-other2").value.trim();
     if (edu) quals.push("文化程度：" + edu);
     if (exp) quals.push("工作经验：" + exp);
     if (lang) quals.push("外语水平：" + lang);
     if (quality) quals.push("基本素质：" + quality);
+    if (other1) quals.push("其他1：" + other1);
+    if (other2) quals.push("其他2：" + other2);
   }
   return {
     doc_type: t,
@@ -158,26 +227,30 @@ function collectDoc() {
     position: isJD ? $("doc-position").value : "",
     headcount: isJD ? $("doc-headcount").value.trim() : "",
     direct_supervisor: isJD ? $("doc-supervisor").value : "",
-    direct_subordinates: isJD ? $("doc-direct-sub").value.trim() : "",
+    direct_subordinates: isJD ? getSubSelected().join("、") : "",
     qualifications: quals.join("\n"),
     responsibilities: isJD ? $("doc-responsibilities").value.trim() : "",
     work_tasks: isJD ? $("doc-work-tasks").value.trim() : "",
     relationships: isJD ? $("doc-relationships").value.trim() : "",
     innovation: isJD ? $("doc-innovation").value.trim() : "",
     assessment: isJD ? $("doc-assessment").value.trim() : "",
+    raw_text: _currentRawText,
+    raw_filename: _currentRawFilename,
   };
 }
 
 function _parseQual(text) {
-  const out = { edu: "", exp: "", lang: "", quality: "" };
+  const out = { edu: "", exp: "", lang: "", quality: "", other1: "", other2: "" };
   if (!text) return out;
   // 去掉行首序号（如 1、 （一） ① 1. 等）后再匹配标签
-  const stripPrefix = (line) => line.replace(/^[\s\d一二三四五六七八九十百①②③④⑤⑥⑦⑧⑨⑩、.（）()\[\]【】]+/, "").trim();
+  const stripPrefix = (line) => line.replace(/^[\s一二三四五六七八九十百①②③④⑤⑥⑦⑧⑨⑩、.（）()\[\]【】]*(?:\d+[\s、.）)]*)?/, "").trim();
   const labels = [
     { key: "edu", names: ["文化程度", "学历", "文化"] },
     { key: "exp", names: ["工作经验", "经验", "从业经验"] },
     { key: "lang", names: ["外语水平", "外语", "语言能力"] },
     { key: "quality", names: ["基本素质", "素质", "职业素养", "素养"] },
+    { key: "other1", names: ["其他1"] },
+    { key: "other2", names: ["其他2"] },
   ];
   text.split("\n").forEach(line => {
     const clean = stripPrefix(line);
@@ -213,17 +286,23 @@ function fillDoc(d) {
   $("doc-position").value = d.position || "";
   $("doc-headcount").value = d.headcount || "";
   $("doc-supervisor").value = d.direct_supervisor || "";
-  $("doc-direct-sub").value = d.direct_subordinates || "";
+  // 直接下级回填：拆分"、"分隔的多选值
+  const subs = (d.direct_subordinates || "").split(/[、,，;；\n]/).map(s => s.trim()).filter(Boolean);
+  setSubSelected(subs);
   const q = _parseQual(d.qualifications || "");
   $("qual-edu").value = q.edu;
   $("qual-exp").value = q.exp;
   $("qual-lang").value = q.lang;
   $("qual-quality").value = q.quality;
+  $("qual-other1").value = q.other1;
+  $("qual-other2").value = q.other2;
   $("doc-responsibilities").value = d.responsibilities || "";
   $("doc-work-tasks").value = d.work_tasks || "";
   $("doc-relationships").value = d.relationships || "";
   $("doc-innovation").value = d.innovation || "";
   $("doc-assessment").value = d.assessment || "";
+  _currentRawText = d.raw_text || "";
+  _currentRawFilename = d.raw_filename || "";
   toggleDocType();
 }
 
@@ -238,7 +317,9 @@ async function saveDoc() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(d),
       });
-      setMsg("editor-msg", "已更新，数字化为 " + (r.item_count || 0) + " 条", true);
+      // 编辑保存后清空 doc-id，避免下一次保存误覆盖本份
+      $("doc-id").value = "";
+      setMsg("editor-msg", "已更新（ID：" + isEdit + "），数字化为 " + (r.item_count || 0) + " 条。表单已重置为新建状态，可继续录入下一份。", true);
     } else {
       const r = await api("/api/documents", {
         method: "POST",
@@ -260,7 +341,7 @@ function resetDoc() {
   $("doc-id").value = "";
   ["doc-no", "doc-title", "doc-purpose", "doc-scope", "doc-regulation",
    "doc-duty", "doc-work", "doc-records", "doc-files",
-   "doc-headcount", "doc-direct-sub",
+   "doc-headcount",
    "qual-edu", "qual-exp", "qual-lang", "qual-quality",
    "doc-responsibilities", "doc-work-tasks", "doc-relationships",
    "doc-innovation", "doc-assessment"].forEach(id => $(id).value = "");
@@ -268,6 +349,9 @@ function resetDoc() {
   $("doc-department").value = "";
   $("doc-position").value = "";
   $("doc-supervisor").value = "";
+  clearSubSelected();
+  _currentRawText = "";
+  _currentRawFilename = "";
   toggleDocType();
   setMsg("editor-msg", "", true);
 }
@@ -314,7 +398,10 @@ async function parseWord() {
       if (f.position) $("doc-position").value = f.position;
       if (f.headcount) $("doc-headcount").value = f.headcount;
       if (f.direct_supervisor) $("doc-supervisor").value = f.direct_supervisor;
-      if (f.direct_subordinates) $("doc-direct-sub").value = f.direct_subordinates;
+      if (f.direct_subordinates) {
+        const subs = String(f.direct_subordinates).split(/[、,，;；\n]/).map(s => s.trim()).filter(Boolean);
+        setSubSelected(subs);
+      }
       // 基本任职资格拆回四个子项
       const q = _parseQual(f.qualifications || "");
       $("qual-edu").value = q.edu;
@@ -327,6 +414,9 @@ async function parseWord() {
       if (f.innovation) $("doc-innovation").value = f.innovation;
       if (f.assessment) $("doc-assessment").value = f.assessment;
     }
+    // 保存原始文本和文件名，供保存时入库
+    _currentRawText = data.raw_text || "";
+    _currentRawFilename = data.raw_filename || "";
     setMsg("editor-msg", `解析成功（原文 ${data.text_length} 字），请核对后保存`, true);
   } catch (e) {
     setMsg("editor-msg", "解析失败：" + e.message, false);
@@ -395,13 +485,19 @@ function renderDocList() {
 
   const tb = $("doc-table");
   if (!total) {
-    tb.innerHTML = '<tr><td colspan="11" style="color:#6b7280;text-align:center;padding:20px">暂无符合条件的文件</td></tr>';
+    tb.innerHTML = '<tr><td colspan="12" style="color:#6b7280;text-align:center;padding:20px">暂无符合条件的文件</td></tr>';
     bindDocListActions();
     renderDocPagination(0, 0, 0, 0);
     return;
   }
 
-  tb.innerHTML = pageRows.map(r => `
+  tb.innerHTML = pageRows.map(r => {
+    const hasRaw = r.has_raw;
+    const rawLink = hasRaw
+      ? `<a data-id="${r.id}" class="open-raw" style="color:#2563eb" title="用 Word 打开原始文件">查看</a>`
+        + `<a href="/api/documents/${r.id}/download" class="raw-dl" style="color:#64748b;margin-left:6px" title="下载原始 Word 文件">下载</a>`
+      : `<span style="color:#cbd5e1">—</span>`;
+    return `
     <tr>
       <td>${r.id}</td>
       <td>${esc(r.doc_type || "")}</td>
@@ -413,12 +509,14 @@ function renderDocList() {
       <td>${esc(r.guest_trip || "")}</td>
       <td>${esc(r.compliance || "")}</td>
       <td>${esc(r.created_at || "")}</td>
+      <td>${rawLink}</td>
       <td>
         <a data-id="${r.id}" class="open-doc">查看</a>
         <a data-id="${r.id}" class="edit-doc" style="margin-left:8px">编辑</a>
         <a data-id="${r.id}" class="del-doc" style="margin-left:8px;color:#dc2626">删除</a>
       </td>
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
   bindDocListActions();
   initColResize("doc-list-table");
 
@@ -493,7 +591,37 @@ function bindDocListActions() {
       await api("/api/documents/" + a.dataset.id, { method: "DELETE" });
       loadDocuments();
     });
+  tb.querySelectorAll(".open-raw").forEach(a =>
+    a.onclick = async () => {
+      try {
+        await api(`/api/documents/${a.dataset.id}/open`);
+      } catch (e) {
+        alert("打开失败：" + e.message);
+      }
+    });
 }
+
+async function showRawText(docId) {
+  try {
+    const d = await api("/api/documents/" + docId);
+    const r = await api(`/api/documents/${docId}/raw`);
+    const text = r.raw_text || "";
+    $("raw-modal-title").textContent = `原始文档：${d.title || d.doc_no || docId}`;
+    $("raw-modal-content").textContent = text || "（该文档未保存原始文本）";
+    $("raw-modal").style.display = "flex";
+  } catch (e) {
+    alert("加载原文失败：" + e.message);
+  }
+}
+
+function closeRawModal() {
+  $("raw-modal").style.display = "none";
+}
+
+// 点击遮罩关闭弹窗
+document.addEventListener("click", (e) => {
+  if (e.target.id === "raw-modal") closeRawModal();
+});
 
 // 文件列表排序
 document.addEventListener("click", (e) => {
@@ -535,24 +663,52 @@ function esc(s) {
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function kv(label, value, multi) {
+  if (value == null || value === "") return "";
+  const v = multi ? nl2br(esc(value)) : esc(value);
+  return `<b>${label}</b><span>${v}</span>`;
+}
+
 // ---------- 详情 & 结果 ----------
 async function openDetail(id) {
   currentDocId = id;
   const d = await api("/api/documents/" + id);
   $("detail-title").textContent = `分析结果：${d.title || d.doc_no || id}`;
-  $("doc-preview").innerHTML = `
-    <div class="kv">
-      <b>文件类型</b><span>${esc(d.doc_type)}</span>
-      <b>文件编号</b><span>${esc(d.doc_no)}</span>
-      <b>标题</b><span>${esc(d.title)}</span>
-      <b>目的</b><span>${esc(d.purpose)}</span>
-      <b>范围</b><span>${esc(d.scope)}</span>
-      ${d.regulation ? `<b>管理规定</b><span>${nl2br(esc(d.regulation))}</span>` : ""}
-      ${d.duty ? `<b>职责</b><span>${nl2br(esc(d.duty))}</span>` : ""}
-      ${d.work_requirement ? `<b>工作要求</b><span>${nl2br(esc(d.work_requirement))}</span>` : ""}
-      <b>相关记录</b><span>${esc(d.related_records)}</span>
-      <b>相关文件</b><span>${esc(d.related_files)}</span>
-    </div>`;
+  const t = d.doc_type;
+  const isJD = t === "工作说明书";
+  const isReg = t === "管理制度" || t === "店级管理制度";
+  const isProc = t === "工作程序";
+
+  let body = `<b>文件类型</b><span>${esc(t)}</span>` +
+             `<b>文件编号</b><span>${esc(d.doc_no)}</span>` +
+             `<b>标题</b><span>${esc(d.title)}</span>`;
+
+  if (isJD) {
+    // 工作说明书：岗位基本信息
+    body += kv("所属部门", d.department);
+    body += kv("岗位", d.position);
+    body += kv("人数", d.headcount);
+    body += kv("直接上级", d.direct_supervisor);
+    body += kv("直接下级", d.direct_subordinates);
+    body += kv("基本任职资格", d.qualifications, true);
+    body += kv("职责", d.responsibilities, true);
+    body += kv("工作任务", d.work_tasks, true);
+    body += kv("工作关系", d.relationships, true);
+    body += kv("创新", d.innovation, true);
+    body += kv("考核", d.assessment, true);
+  } else {
+    body += kv("目的", d.purpose);
+    body += kv("范围", d.scope);
+    if (isReg) body += kv("管理规定", d.regulation, true);
+    if (isProc) {
+      body += kv("职责", d.duty, true);
+      body += kv("工作要求", d.work_requirement, true);
+    }
+    body += kv("相关记录", d.related_records);
+    body += kv("相关文件", d.related_files);
+  }
+
+  $("doc-preview").innerHTML = `<div class="kv">${body}</div>`;
   showTab("detail");
   try {
     const r = await api(`/api/documents/${id}/result`);
@@ -782,6 +938,95 @@ const LANE_COLORS = [
 ];
 const MAIN_COLOR = "#2563eb";
 
+// 按字符宽度把文字折成多行（适配中文，返回行数组）
+function wrapText(text, maxWidth, fontSize, fontWeight) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  ctx.font = `${fontWeight || "600"} ${fontSize}px "Microsoft YaHei", sans-serif`;
+  const lines = [];
+  let line = "";
+  for (const ch of String(text || "")) {
+    const test = line + ch;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      lines.push(line);
+      line = ch;
+    } else {
+      line = test;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+// 把多行文字渲染成 SVG <text> + <tspan>，返回字符串片段
+function renderMultilineText(lines, cx, baseY, fontSize, color, weight, lineHeight) {
+  const totalH = lines.length * lineHeight;
+  const startY = baseY - totalH / 2 + lineHeight / 2;
+  let out = `<text x="${cx}" y="${startY}" text-anchor="middle" font-size="${fontSize}" font-weight="${weight}" fill="${color}">`;
+  lines.forEach((ln, i) => {
+    const dy = i === 0 ? 0 : lineHeight;
+    out += `<tspan x="${cx}" dy="${dy}">${esc(ln)}</tspan>`;
+  });
+  out += `</text>`;
+  return out;
+}
+
+// 下载流程图为 PNG（高分辨率）
+function downloadFlowchartPng(el, title) {
+  const svg = el.querySelector("svg");
+  if (!svg) return;
+  const serializer = new XMLSerializer();
+  let src = serializer.serializeToString(svg);
+  if (!src.match(/^<svg[^>]+xmlns="http:\/\/www\.w3\.org\/2000\/svg"/)) {
+    src = src.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+  }
+  const blob = new Blob([src], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = () => {
+    const vb = svg.viewBox.baseVal;
+    const scale = 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = vb.width * scale;
+    canvas.height = vb.height * scale;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    URL.revokeObjectURL(url);
+    canvas.toBlob((b) => {
+      if (!b) { alert("PNG 导出失败，请改用 SVG 下载"); return; }
+      const a = document.createElement("a");
+      a.download = (title || "流程图") + ".png";
+      a.href = URL.createObjectURL(b);
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }, "image/png");
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    alert("图片加载失败，请改用 SVG 下载");
+  };
+  img.src = url;
+}
+
+// 下载流程图为 SVG（矢量，可在浏览器/Word 中打开）
+function downloadFlowchartSvg(el, title) {
+  const svg = el.querySelector("svg");
+  if (!svg) return;
+  const serializer = new XMLSerializer();
+  let src = serializer.serializeToString(svg);
+  if (!src.match(/^<svg[^>]+xmlns="http:\/\/www\.w3\.org\/2000\/svg"/)) {
+    src = src.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+  }
+  const blob = new Blob([src], { type: "image/svg+xml;charset=utf-8" });
+  const a = document.createElement("a");
+  a.download = (title || "流程图") + ".svg";
+  a.href = URL.createObjectURL(blob);
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 // 用 SVG 渲染泳道图
 function renderSwimlane(el, data) {
   const title = data.title || "流程图";
@@ -807,7 +1052,7 @@ function renderSwimlane(el, data) {
   const svgW = Math.max(LANE_LABEL_W + n * NODE_W + (n + 1) * NODE_GAP, 900);
   const svgH = TITLE_H + MAIN_LANE_H + laneDepts.length * SUB_LANE_H + LEGEND_H;
 
-  let s = `<svg viewBox="0 0 ${svgW} ${svgH}" width="100%" style="max-width:${svgW}px;display:block;margin:0 auto;border:1px solid #e2e8f0;border-radius:10px;background:#fff;box-sizing:border-box;">`;
+  let s = `<svg viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}" style="display:block;background:#fff;box-sizing:border-box;" xmlns="http://www.w3.org/2000/svg">`;
   s += `<defs>
     <marker id="arrMain" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
@@ -855,16 +1100,22 @@ function renderSwimlane(el, data) {
   }
   s += `<line x1="${LANE_LABEL_W}" y1="${TITLE_H}" x2="${LANE_LABEL_W}" y2="${y}" stroke="#cbd5e1" stroke-width="1"/>`;
 
-  // 主流程节点（带阴影）
+  // 主流程节点（带阴影）—— 文字自动换行
   const nodeY = mainY + (MAIN_LANE_H - NODE_H) / 2;
   const centers = [];
+  const textMaxW = NODE_W - 20;       // 文字最大宽度（两侧留白）
+  const mainTextTop = nodeY + 34;      // 文字区域顶部（避开左上角编号圆）
+  const mainTextBaseY = nodeY + NODE_H / 2 + 10;
   steps.forEach((st, i) => {
     const x = LANE_LABEL_W + NODE_GAP + i * (NODE_W + NODE_GAP);
     centers.push(x + NODE_W / 2);
     s += `<rect x="${x}" y="${nodeY}" width="${NODE_W}" height="${NODE_H}" rx="10" fill="#ffffff" stroke="${MAIN_COLOR}" stroke-width="1.5" filter="url(#shadow)"/>`;
     s += `<circle cx="${x + 16}" cy="${nodeY + 16}" r="11" fill="${MAIN_COLOR}"/>`;
     s += `<text x="${x + 16}" y="${nodeY + 16.5}" text-anchor="middle" dominant-baseline="central" font-size="11" font-weight="700" fill="#ffffff">${st.id}</text>`;
-    s += `<text x="${x + NODE_W/2}" y="${nodeY + NODE_H/2 + 10}" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="600" fill="#1e293b">${esc(st.text)}</text>`;
+    // 文字折行（最多 3 行，超出截断）
+    let lines = wrapText(st.text, textMaxW, 13, "600");
+    if (lines.length > 3) lines = lines.slice(0, 2).concat([lines[2] ? lines[2].slice(0, 8) + "…" : "…"]);
+    s += renderMultilineText(lines, x + NODE_W / 2, mainTextBaseY, 13, "#1e293b", "600", 16);
   });
 
   // 主流程连线
@@ -874,8 +1125,9 @@ function renderSwimlane(el, data) {
     s += `<line x1="${x1}" y1="${nodeY + NODE_H/2}" x2="${x2}" y2="${nodeY + NODE_H/2}" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrMain)"/>`;
   }
 
-  // 协作节点（浅色填充）+ 虚线连线
+  // 协作节点（浅色填充）+ 虚线连线 —— 文字自动换行
   const subNodeH = 56;
+  const subTextMaxW = NODE_W - 16;
   collabs.forEach(c => {
     const dept = c.to_dept;
     const c2 = colorMap[dept];
@@ -886,7 +1138,9 @@ function renderSwimlane(el, data) {
     const subY = ly2 + (SUB_LANE_H - subNodeH) / 2;
     const subX = cx - NODE_W / 2;
     s += `<rect x="${subX}" y="${subY}" width="${NODE_W}" height="${subNodeH}" rx="10" fill="${c2.light}" stroke="${c2.main}" stroke-width="1.5"/>`;
-    s += `<text x="${cx}" y="${subY + subNodeH/2}" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="600" fill="${c2.dark}">${esc(c.text)}</text>`;
+    let lines = wrapText(c.text, subTextMaxW, 13, "600");
+    if (lines.length > 3) lines = lines.slice(0, 2).concat([lines[2] ? lines[2].slice(0, 8) + "…" : "…"]);
+    s += renderMultilineText(lines, cx, subY + subNodeH / 2, 13, c2.dark, "600", 15);
     // 虚线：主节点底部 -> 协作节点顶部
     s += `<line x1="${cx}" y1="${nodeY + NODE_H}" x2="${cx}" y2="${subY}" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrCoop)"/>`;
   });
@@ -903,7 +1157,40 @@ function renderSwimlane(el, data) {
   s += `<text x="${svgW/2}" y="${svgH - 18}" text-anchor="middle" font-size="12" fill="#94a3b8">内容依据文件信息重构，仅表达流程结构与协作关系</text>`;
 
   s += "</svg>";
-  el.innerHTML = s;
+
+  // 组装：工具栏 + 可缩放滚动容器
+  el.innerHTML = `
+    <div class="flowchart-toolbar">
+      <button class="fc-btn" data-act="zoom-out" title="缩小">−</button>
+      <span class="fc-zoom-label" data-act="label">100%</span>
+      <button class="fc-btn" data-act="zoom-in" title="放大">+</button>
+      <button class="fc-btn" data-act="zoom-reset" title="重置">重置</button>
+      <button class="fc-btn fc-download" data-act="download-png" title="下载为 PNG 图片">下载 PNG</button>
+      <button class="fc-btn" data-act="download-svg" title="下载为 SVG 矢量图">下载 SVG</button>
+    </div>
+    <div class="flowchart-scroll">
+      <div class="flowchart-scale">${s}</div>
+    </div>`;
+
+  // 绑定缩放与下载事件
+  const scaleEl = el.querySelector(".flowchart-scale");
+  const labelEl = el.querySelector('[data-act="label"]');
+  let zoom = 1;
+  const setZoom = (z) => {
+    zoom = Math.max(0.3, Math.min(3, z));
+    scaleEl.style.transform = `scale(${zoom})`;
+    labelEl.textContent = Math.round(zoom * 100) + "%";
+  };
+  el.querySelectorAll(".fc-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const act = btn.dataset.act;
+      if (act === "zoom-in") setZoom(zoom + 0.15);
+      else if (act === "zoom-out") setZoom(zoom - 0.15);
+      else if (act === "zoom-reset") setZoom(1);
+      else if (act === "download-png") downloadFlowchartPng(el, title);
+      else if (act === "download-svg") downloadFlowchartSvg(el, title);
+    });
+  });
 }
 
 function parseList(v) {

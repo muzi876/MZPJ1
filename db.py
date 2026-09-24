@@ -159,7 +159,7 @@ def init_db():
     for col in ("department", "position", "headcount", "direct_supervisor",
                 "direct_subordinates", "indirect_subordinates", "qualifications",
                 "responsibilities", "work_tasks", "relationships", "innovation",
-                "assessment"):
+                "assessment", "raw_text", "raw_filename"):
         if col not in dcols:
             conn.execute(f"ALTER TABLE documents ADD COLUMN {col} TEXT")
     conn.commit()

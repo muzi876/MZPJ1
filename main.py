@@ -1,6 +1,7 @@
 """FastAPI 应用：文档录入、LLM 生成 RASIC/接口卡/流程图、SQLite 存取。"""
 import csv
 import json
+import os
 from contextlib import asynccontextmanager
 from io import StringIO
 from pathlib import Path
@@ -18,7 +19,28 @@ import llm
 @asynccontextmanager
 async def lifespan(app):
     db.ensure_startup()
+    _cleanup_gen_py()
     yield
+
+
+def _cleanup_gen_py():
+    """清理 pywin32 的 gen_py COM 缓存，避免缓存损坏导致 Word 解析失败。"""
+    import shutil
+    import tempfile
+    candidates = [
+        Path(tempfile.gettempdir()) / "gen_py",
+    ]
+    try:
+        import win32com
+        candidates.append(Path(win32com.__file__).parent / "gen_py")
+    except Exception:
+        pass
+    for p in candidates:
+        try:
+            if p.exists() and p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+        except Exception:
+            pass
 
 
 app = FastAPI(title="酒店管理制度文件分析系统", lifespan=lifespan)
@@ -64,6 +86,8 @@ class DocumentIn(BaseModel):
     relationships: str = ""
     innovation: str = ""
     assessment: str = ""
+    raw_text: str = ""
+    raw_filename: str = ""
 
 
 class ItemsDeleteIn(BaseModel):
@@ -280,14 +304,14 @@ def create_document(d: DocumentIn):
         "INSERT INTO documents(doc_type,doc_no,title,purpose,scope,regulation,"
         "duty,work_requirement,related_records,related_files,department,position,"
         "headcount,direct_supervisor,direct_subordinates,indirect_subordinates,"
-        "qualifications,responsibilities,work_tasks,relationships,innovation,assessment)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "qualifications,responsibilities,work_tasks,relationships,innovation,assessment,raw_text,raw_filename)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (d.doc_type, d.doc_no, d.title, d.purpose, d.scope, d.regulation,
          d.duty, d.work_requirement, d.related_records, d.related_files,
          d.department, d.position, d.headcount, d.direct_supervisor,
          d.direct_subordinates, d.indirect_subordinates, d.qualifications,
          d.responsibilities, d.work_tasks, d.relationships, d.innovation,
-         d.assessment),
+         d.assessment, d.raw_text, d.raw_filename),
     )
     conn.commit()
     doc_id = cur.lastrowid
@@ -301,6 +325,7 @@ def list_documents():
     conn = db.get_conn()
     rows = conn.execute(
         "SELECT d.id, d.doc_type, d.doc_no, d.title, d.created_at, d.updated_at, "
+        "CASE WHEN d.raw_filename IS NOT NULL AND d.raw_filename != '' THEN 1 ELSE 0 END AS has_raw, "
         "e.cur_dept, e.main_position, e.person_in_charge, e.filter_result, "
         "e.relevance, e.guest_trip, e.compliance, e.reason "
         "FROM documents d LEFT JOIN existing_files e ON d.doc_no = e.doc_no "
@@ -320,6 +345,88 @@ def get_document(doc_id: int):
     return dict(row)
 
 
+@app.get("/api/documents/{doc_id}/raw")
+def get_document_raw(doc_id: int):
+    """获取文档导入的原始文本，用于对比查看。"""
+    conn = db.get_conn()
+    row = conn.execute(
+        "SELECT raw_text FROM documents WHERE id=?", (doc_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    return {"raw_text": row["raw_text"] or ""}
+
+
+@app.get("/api/documents/{doc_id}/download")
+def download_document_raw(doc_id: int):
+    """下载文档导入的原始 Word 文件。"""
+    conn = db.get_conn()
+    row = conn.execute(
+        "SELECT raw_filename, doc_no, title FROM documents WHERE id=?", (doc_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    stored = row["raw_filename"]
+    if not stored:
+        raise HTTPException(status_code=404, detail="该文档未保存原始文件")
+    uploads_dir = Path(__file__).resolve().parent / "uploads"
+    fpath = uploads_dir / stored
+    if not fpath.exists():
+        raise HTTPException(status_code=404, detail="原始文件已丢失")
+    # 下载时用"编号_标题"作为文件名，更直观
+    ext = Path(stored).suffix
+    dl_name = f"{row['doc_no'] or row['id']}_{row['title'] or 'document'}{ext}"
+    return FileResponse(str(fpath), filename=dl_name,
+                        media_type="application/octet-stream")
+
+
+@app.get("/api/documents/{doc_id}/open")
+def open_document_raw(doc_id: int):
+    """直接用系统默认程序（Word）打开原始文件。"""
+    import sys
+    conn = db.get_conn()
+    row = conn.execute(
+        "SELECT raw_filename FROM documents WHERE id=?", (doc_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    stored = row["raw_filename"]
+    if not stored:
+        raise HTTPException(status_code=404, detail="该文档未保存原始文件")
+    uploads_dir = Path(__file__).resolve().parent / "uploads"
+    fpath = uploads_dir / stored
+    if not fpath.exists():
+        raise HTTPException(status_code=404, detail="原始文件已丢失")
+    try:
+        # 清理 Word 残留的锁文件（~$ 开头），否则 Word 会打开后又关闭
+        lock_file = fpath.parent / f"~${fpath.name}"
+        if lock_file.exists():
+            try:
+                lock_file.unlink()
+            except OSError:
+                pass
+        if sys.platform.startswith("win"):
+            # 用 ctypes 直接调用 ShellExecuteW，确保 Word 进程独立于服务器
+            import ctypes
+            SW_SHOWNORMAL = 1
+            ret = ctypes.windll.shell32.ShellExecuteW(
+                None, "open", str(fpath), None, None, SW_SHOWNORMAL)
+            # 返回值 <= 32 表示失败
+            if ret <= 32:
+                raise OSError(f"ShellExecuteW 失败，错误码：{ret}")
+        elif sys.platform == "darwin":
+            import os
+            os.system(f'open "{fpath}"')
+        else:
+            import os
+            os.system(f'xdg-open "{fpath}"')
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"打开失败：{e}")
+
+
 @app.put("/api/documents/{doc_id}")
 def update_document(doc_id: int, d: DocumentIn):
     conn = db.get_conn()
@@ -336,13 +443,13 @@ def update_document(doc_id: int, d: DocumentIn):
         "related_files=?,department=?,position=?,headcount=?,direct_supervisor=?,"
         "direct_subordinates=?,indirect_subordinates=?,qualifications=?,"
         "responsibilities=?,work_tasks=?,relationships=?,innovation=?,assessment=?,"
-        "updated_at=datetime('now','localtime') WHERE id=?",
+        "raw_text=?,raw_filename=?,updated_at=datetime('now','localtime') WHERE id=?",
         (d.doc_type, d.doc_no, d.title, d.purpose, d.scope, d.regulation,
          d.duty, d.work_requirement, d.related_records, d.related_files,
          d.department, d.position, d.headcount, d.direct_supervisor,
          d.direct_subordinates, d.indirect_subordinates, d.qualifications,
          d.responsibilities, d.work_tasks, d.relationships, d.innovation,
-         d.assessment, doc_id),
+         d.assessment, d.raw_text, d.raw_filename, doc_id),
     )
     conn.commit()
     conn.close()
@@ -369,20 +476,30 @@ def delete_document(doc_id: int):
 def _extract_word_text_via_com(file_path: str) -> str:
     """用 Word COM 打开文档并另存为纯文本（含自动编号序号），返回纯文本。"""
     import pythoncom
-    import win32com.client as win32
+    import time
+    from win32com.client import dynamic
     pythoncom.CoInitialize()
-    word = win32.gencache.EnsureDispatch("Word.Application")
+    # 用 dynamic.Dispatch（纯晚期绑定），完全绕开 gen_py 缓存，避免缓存损坏报错
+    word = dynamic.Dispatch("Word.Application")
     word.Visible = False
     word.DisplayAlerts = False
     txt_path = str(Path(file_path).with_suffix(".txt"))
+    doc = None
     try:
         doc = word.Documents.Open(file_path)
         # 7 = wdFormatUnicodeText，另存为文本时 Word 会把自动编号序号写入
         doc.SaveAs2(txt_path, FileFormat=7)
         doc.Close(False)
+        doc = None
     finally:
-        word.Quit()
+        try:
+            word.Quit()
+        except Exception:
+            pass
+        word = None
         pythoncom.CoUninitialize()
+        # 等待 Word 完全退出并释放文件句柄
+        time.sleep(0.5)
     with open(txt_path, "rb") as f:
         raw = f.read()
     Path(txt_path).unlink(missing_ok=True)
@@ -407,14 +524,23 @@ def _extract_word_text(filename: str, content: bytes) -> str:
     if ext not in (".doc", ".docx"):
         raise ValueError(f"不支持的文件格式：{ext}")
     import tempfile
+    import time
     suffix = ext if ext in (".doc", ".docx") else ".docx"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
+    # 用 mkstemp + 手动关闭，避免 NamedTemporaryFile 在 Windows 上的句柄占用问题
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    with os.fdopen(fd, "wb") as f:
+        f.write(content)
     try:
         return _extract_word_text_via_com(tmp_path)
     finally:
-        Path(tmp_path).unlink(missing_ok=True)
+        # 重试删除临时文件，等待 Word 释放句柄
+        for _ in range(5):
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+                break
+            except OSError:
+                time.sleep(0.5)
+
 
 
 @app.post("/api/parse-word")
@@ -444,7 +570,18 @@ async def parse_word(doc_type: str = "管理制度", file: UploadFile = File(...
         fields["doc_no"] = fn_doc_no
     if fn_title:
         fields["title"] = fn_title
-    return {"ok": True, "fields": fields, "text_length": len(text)}
+
+    # 保存原始 Word 文件到 uploads 目录
+    uploads_dir = Path(__file__).resolve().parent / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    orig_name = Path(file.filename or "document.docx").name
+    safe_no = fn_doc_no or f"doc_{int(__import__('time').time())}"
+    stored_name = f"{safe_no}_{orig_name}"
+    stored_path = uploads_dir / stored_name
+    stored_path.write_bytes(raw)
+
+    return {"ok": True, "fields": fields, "text_length": len(text),
+            "raw_text": text, "raw_filename": stored_name}
 
 
 def _split_filename(filename: str):
